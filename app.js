@@ -563,6 +563,7 @@ const recipeTotals = items => items.reduce((t, it) => {
 
 function openRecipe(meal) {
   draft = meal ? { id: meal.id, name: meal.name, servings: meal.servings, items: meal.items.map(i => ({ ...i })) }
+    : draft && !draft.id && draft.items.length ? draft // unsaved meal survives a cancelled scan / closed sheet
     : { name: '', servings: 1, items: [] };
   drawRecipe();
 }
@@ -620,6 +621,7 @@ function drawRecipe() {
     };
     S.foods[meal.id] = meal;
     save();
+    draft = null;
     openFood(meal);
   };
   if (draft.id) $('#rdel').onclick = () => { delete S.foods[draft.id]; delete S.favs[draft.id]; save(); closeSheet(); toast('המנה נמחקה'); };
