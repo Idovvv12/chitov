@@ -229,3 +229,5 @@ dialog[open] { animation: up .22s cubic-bezier(.2,.8,.2,1); }
   display: flex; gap: 8px; padding: 8px 16px; background: var(--bg); z-index: 4; }
 .chat-form input { flex: 1; }
 .chat-form button { flex: none; width: 52px; border-radius: 14px; font-size: 20px; }
+.rai { grid-template-columns: 1fr auto; margin-top: 10px; }
+.rai button { white-space: nowrap; }

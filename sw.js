@@ -1,6 +1,6 @@
 // Offline shell: serve cached app files, refresh them in the background.
 // Bump VERSION after changing the file list.
-const VERSION = 'chitov-v2';
+const VERSION = 'chitov-v3';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'logic.js', 'foods.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

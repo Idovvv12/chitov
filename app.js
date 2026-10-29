@@ -490,7 +490,7 @@ function quickAdd(food) {
   render();
 }
 
-function openFoodForm(init = {}, note = '') {
+function openFoodForm(init = {}, note = '', onFood = openFood) {
   sheet(`
     <h2>${S.foods[init.id] || STARTER[init.id] ? 'עריכת מוצר' : 'מוצר חדש'}</h2>
     ${note ? `<p class="note">${esc(note)}</p>` : ''}
@@ -548,7 +548,7 @@ function openFoodForm(init = {}, note = '') {
     };
     S.foods[food.id] = food;
     save();
-    openFood(food);
+    onFood(food);
   };
   if ($('#ffdel')) $('#ffdel').onclick = () => { delete S.foods[init.id]; delete S.favs[init.id]; save(); closeSheet(); toast('המוצר נמחק'); };
 }
@@ -574,7 +574,9 @@ function drawRecipe() {
     <div class="list">${draft.items.map((it, i) => `<div class="row ing"><div class="row-main"><b>${esc(it.name)}</b></div>
       <input class="gin" data-i="${i}" type="number" inputmode="decimal" min="0" value="${it.g}" aria-label="גרם"><span class="muted">ג'</span>
       <button class="x" data-i="${i}" aria-label="הסר">✕</button></div>`).join('')}</div>
-    <button class="ghost wide" id="radd">+ הוסף רכיב</button>
+    <form id="rai" class="row2 rai"><input id="rait" autocomplete="off" enterkeyhint="send" placeholder="כתוב: 300ג' בשר טחון, 3 ביצים, בצל…" aria-label="רכיבים בטקסט חופשי">
+      <button class="primary" id="raib">✨ חשב</button></form>
+    <div class="row2"><button class="ghost" id="radd">🔍 חפש רכיב</button><button class="ghost" id="rscan">▥ סרוק ברקוד</button></div>
     <div class="sum" id="rsum"></div>
     <button class="primary wide" id="rsave">שמור מנה</button>
     ${draft.id ? '<button class="danger wide" id="rdel">מחק מנה</button>' : ''}`);
@@ -589,6 +591,23 @@ function drawRecipe() {
   body.querySelectorAll('.gin').forEach(inp => inp.oninput = () => { draft.items[inp.dataset.i].g = +inp.value || 0; sum(); });
   body.querySelectorAll('.ing .x').forEach(b => b.onclick = () => { draft.items.splice(b.dataset.i, 1); drawRecipe(); });
   $('#radd').onclick = pickIngredient;
+  $('#rscan').onclick = () => scan(f => addIngredient(f, f.units?.[0]?.[1] || 100));
+  $('#rai').onsubmit = async ev => {
+    ev.preventDefault();
+    const text = $('#rait').value.trim();
+    if (!text || needKey()) return;
+    $('#raib').disabled = true; $('#raib').textContent = 'מחשב…';
+    try {
+      const v = await parseFoods(text, 'RECIPE MODE: Ido is building a home recipe. Every food in his message is an ingredient: always put it in items, whatever the tense. Weights are as he measured them (raw unless he says cooked).');
+      const rs = (v.items || []).map(resolveItem).filter(Boolean);
+      for (const r of rs) addIngredient(r.food, r.qty * unitGrams(r.food, r.unit), true);
+      drawRecipe();
+      toast(rs.length ? `✓ נוספו ${rs.length} רכיבים. ${v.reply}` : v.reply, 6000);
+    } catch (e) {
+      toast('לא הצלחתי לחשב: ' + e.message, 5000);
+      if ($('#raib')) { $('#raib').disabled = false; $('#raib').textContent = '✨ חשב'; }
+    }
+  };
   $('#rsave').onclick = () => {
     const totalG = draft.items.reduce((a, it) => a + it.g, 0);
     if (!draft.name.trim() || !draft.items.length || totalG <= 0) return toast('צריך שם ולפחות רכיב אחד');
@@ -606,6 +625,10 @@ function drawRecipe() {
   if (draft.id) $('#rdel').onclick = () => { delete S.foods[draft.id]; delete S.favs[draft.id]; save(); closeSheet(); toast('המנה נמחקה'); };
   sum();
 }
+function addIngredient(f, g, noDraw) {
+  draft.items.push({ foodId: f.id, name: f.name, g: r1(g), kcal: f.kcal, p: f.p, c: f.c, f: f.f, fib: f.fib || 0 });
+  if (!noDraw) drawRecipe();
+}
 function pickIngredient() {
   sheet(`<h2>הוסף רכיב</h2><input id="pq" type="search" placeholder="חפש…" autocomplete="off"><div id="pr" class="list"></div>
     <button class="ghost wide" id="pback">חזרה למנה</button>`);
@@ -615,9 +638,7 @@ function pickIngredient() {
   pq.oninput = draw;
   pr.onclick = e => {
     const f = getFood(e.target.closest('[data-pick]')?.dataset.pick);
-    if (!f) return;
-    draft.items.push({ foodId: f.id, name: f.name, g: f.units?.[0]?.[1] || 100, kcal: f.kcal, p: f.p, c: f.c, f: f.f, fib: f.fib || 0 });
-    drawRecipe();
+    if (f) addIngredient(f, f.units?.[0]?.[1] || 100);
   };
   $('#pback').onclick = drawRecipe;
   pq.focus();
@@ -664,9 +685,9 @@ function fromOFF(p, code) {
 // Open Food Facts is crowd-sourced and often wrong for Israeli products (missing sizes, kJ typed as kcal),
 // so a scan is never trusted blindly: it's shown in the form to check against the package, once.
 const VERIFY = 'נמצא במאגר העולמי – שם יש הרבה טעויות במוצרים ישראליים. השווה לטבלה על האריזה (או צלם אותה) ובדוק את משקל הגביע/האריזה ביחידות. אחרי שמירה – נשמר לתמיד.';
-async function lookupBarcode(code) {
+async function lookupBarcode(code, onFood = openFood) {
   const local = allFoods().find(f => f.barcode === code);
-  if (local) return local.ok ? openFood(local) : openFoodForm(local, VERIFY);
+  if (local) return local.ok ? onFood(local) : openFoodForm(local, VERIFY, onFood);
   toast('מחפש את המוצר…', 8000);
   let p = null;
   try {
@@ -676,18 +697,18 @@ async function lookupBarcode(code) {
   const food = p && fromOFF(p, code);
   if (food && food.kcal > 0) {
     toast('');
-    if (food.kcal <= 900 && food.p <= 100 && food.c <= 100 && food.f <= 100) return openFoodForm(food, VERIFY);
+    if (food.kcal <= 900 && food.p <= 100 && food.c <= 100 && food.f <= 100) return openFoodForm(food, VERIFY, onFood);
     for (const k of ['kcal', 'p', 'c', 'f', 'fib']) food[k] = '';
-    return openFoodForm(food, 'נמצא במאגר העולמי, אבל הערכים שם שגויים. צלם את התווית או הקלד מהאריזה.');
+    return openFoodForm(food, 'נמצא במאגר העולמי, אבל הערכים שם שגויים. צלם את התווית או הקלד מהאריזה.', onFood);
   }
   toast('');
-  openFoodForm(food || { barcode: code }, 'המוצר עוד לא במאגר. צלם את טבלת הערכים התזונתיים – והוא יישמר לתמיד.');
+  openFoodForm(food || { barcode: code }, 'המוצר עוד לא במאגר. צלם את טבלת הערכים התזונתיים – והוא יישמר לתמיד.', onFood);
 }
 
-async function scan() {
+async function scan(onFood) {
   if (!('BarcodeDetector' in window)) {
     const code = prompt('סורק הברקוד לא נתמך בדפדפן הזה. הקלד את מספר הברקוד:');
-    if (code?.trim()) lookupBarcode(code.trim());
+    if (code?.trim()) lookupBarcode(code.trim(), onFood);
     return;
   }
   let stream;
@@ -703,13 +724,13 @@ async function scan() {
   const stop = () => { done = true; stream.getTracks().forEach(t => t.stop()); };
   dlg.addEventListener('close', stop, { once: true });
   $('#sclose').onclick = closeSheet;
-  $('#smanual').onclick = () => { closeSheet(); const c = prompt('מספר הברקוד:'); if (c?.trim()) lookupBarcode(c.trim()); };
+  $('#smanual').onclick = () => { closeSheet(); const c = prompt('מספר הברקוד:'); if (c?.trim()) lookupBarcode(c.trim(), onFood); };
   while (!done) {
     await new Promise(r => setTimeout(r, 150));
     if (done || video.readyState < 2) continue;
     try {
       const [b] = await det.detect(video);
-      if (b && !done) { navigator.vibrate?.(60); closeSheet(); lookupBarcode(b.rawValue); }
+      if (b && !done) { navigator.vibrate?.(60); closeSheet(); lookupBarcode(b.rawValue, onFood); }
     } catch {}
   }
 }
@@ -827,37 +848,42 @@ const CHAT_SCHEMA = (() => {
 })();
 const foodLine = f => `${f.id}|${f.name}${f.brand ? ` (${f.brand})` : ''}|${r0(f.kcal)}/${r1(f.p)}/${r1(f.c)}/${r1(f.f)}|${(f.units || []).map(u => `${u[0]}=${r0(u[1])}`).join(',')}`;
 
-function chatEntry(it, slot) {
+// Gemini item → DB food (or a "≈" per-100 g estimate) + portion; null if the numbers are implausible.
+function resolveItem(it) {
   const food = it.id && getFood(it.id);
   if (food) {
-    if (it.unit && it.qty > 0 && (food.units || []).some(u => u[0] === it.unit)) return makeEntry(food, it.qty, it.unit, slot);
-    return it.grams > 0 && it.grams < 3000 ? makeEntry(food, it.grams, null, slot) : null;
+    if (it.unit && it.qty > 0 && (food.units || []).some(u => u[0] === it.unit)) return { food, qty: it.qty, unit: it.unit };
+    return it.grams > 0 && it.grams < 3000 ? { food, qty: it.grams, unit: null } : null;
   }
   if (!(it.grams > 0 && it.grams < 3000 && it.kcal >= 0 && it.kcal <= 900 && it.name)) return null;
-  return makeEntry({ id: 'est:' + it.name, name: '≈ ' + it.name, kcal: it.kcal, p: it.p || 0, c: it.c || 0, f: it.f || 0 }, it.grams, null, slot);
+  return { food: { id: 'est:' + it.name, name: '≈ ' + it.name, kcal: it.kcal, p: it.p || 0, c: it.c || 0, f: it.f || 0 }, qty: it.grams, unit: null };
+}
+
+const needKey = () => !S.settings.geminiKey && (toast('צריך מפתח Gemini – לשונית "תוכנית" ← הגדרות', 5000), true);
+function parseFoods(text, context, history = []) {
+  return gemini({
+    systemInstruction: { parts: [{ text: `${CHAT_PROMPT}
+${context}
+FOOD DATABASE (id|name|kcal/protein/carbs/fat per 100 g|units name=grams):
+${allFoods().map(foodLine).join('\n')}` }] },
+    contents: [...history.map(m => ({ role: m.role === 'me' ? 'user' : 'model', parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }] }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: CHAT_SCHEMA },
+  });
 }
 
 async function sendChat() {
   const inp = $('#ci'), text = inp.value.trim();
-  if (!text || chatBusy) return;
-  if (!S.settings.geminiKey) return toast('צריך מפתח Gemini – לשונית "תוכנית" ← הגדרות', 5000);
+  if (!text || chatBusy || needKey()) return;
   const day = todayKey(), t = totals(day), tg = targetOf(day);
   const history = S.chat.filter(m => !m.err).slice(-6);
   while (history[0]?.role === 'ai') history.shift();
   S.chat.push({ role: 'me', text });
   chatBusy = true; render();
   try {
-    const v = await gemini({
-      systemInstruction: { parts: [{ text: `${CHAT_PROMPT}
-Today so far: ${r0(t.kcal)} kcal, protein ${r0(t.p)} g, carbs ${r0(t.c)} g, fat ${r0(t.f)} g.
-Today's targets: ${tg.kcal} kcal, protein ${tg.p} g, carbs ${tg.c} g, fat ${tg.f} g.
-FOOD DATABASE (id|name|kcal/protein/carbs/fat per 100 g|units name=grams):
-${allFoods().map(foodLine).join('\n')}` }] },
-      contents: [...history.map(m => ({ role: m.role === 'me' ? 'user' : 'model', parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }] }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: CHAT_SCHEMA },
-    });
+    const v = await parseFoods(text, `Today so far: ${r0(t.kcal)} kcal, protein ${r0(t.p)} g, carbs ${r0(t.c)} g, fat ${r0(t.f)} g.
+Today's targets: ${tg.kcal} kcal, protein ${tg.p} g, carbs ${tg.c} g, fat ${tg.f} g.`, history);
     const slot = SLOTS.some(s => s[0] === v.slot) ? v.slot : slotNow();
-    const entries = (v.items || []).map(it => chatEntry(it, slot)).filter(Boolean);
+    const entries = (v.items || []).map(resolveItem).filter(Boolean).map(r => makeEntry(r.food, r.qty, r.unit, slot));
     if (entries.length) addEntries(day, entries);
     S.chat.push({ role: 'ai', text: v.reply, day, ids: entries.map(e => e.id) });
   } catch (e) {
@@ -931,7 +957,7 @@ const ACT = {
     toast(`הועתקו ${src.length} פריטים`);
     render();
   },
-  scan,
+  scan: () => scan(),
   label: async () => { const v = await readLabel(); if (v) openFoodForm({ ...v, units: labelUnits(v) }, 'נקרא מהתווית – בדוק שהמספרים תואמים לאריזה'); },
   newMeal: () => openRecipe(),
   newFood: () => openFoodForm({ name: query.trim() }),
