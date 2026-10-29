@@ -20,7 +20,7 @@ const KEY = 'chitov', PHOTOS = 'chitov-photos';
 const DEFAULTS = () => ({
   profile: { weight: 75, height: 183, age: 16, sex: 'm', activity: 1.45, start: todayKey() },
   targets: null, foods: {}, log: {}, weights: {}, sports: {}, favs: {}, celebrated: {},
-  settings: { geminiKey: '' }, lastCheckin: null,
+  settings: { geminiKey: '' }, lastCheckin: null, goal: null, chat: [],
 });
 let S = load();
 function load() {
@@ -28,6 +28,8 @@ function load() {
   try { s = JSON.parse(localStorage.getItem(KEY)); } catch {}
   s = { ...DEFAULTS(), ...s };
   if (!s.targets) s.targets = calcTargets(s.profile);
+  // ~70 kg ≈ 10–12% body fat for Ido (now ~17–19%), i.e. visible abs. Editable in settings.
+  if (!s.goal) s.goal = { kg: 70, startKg: s.profile.weight, fromKg: s.profile.weight, from: s.profile.start };
   return s;
 }
 function save() {
@@ -36,7 +38,7 @@ function save() {
 }
 function loadPhotos() { try { return JSON.parse(localStorage.getItem(PHOTOS)) || []; } catch { return []; } }
 
-let tab = 'today', viewDay = todayKey(), addSlot = slotNow(), query = '', offResults = null;
+let tab = 'today', viewDay = todayKey(), addSlot = slotNow(), query = '', offResults = null, chatBusy = false;
 
 const STARTER = Object.fromEntries(FOODS.map(f => [f.id, f]));
 const allFoods = () => Object.values({ ...STARTER, ...S.foods });
@@ -59,6 +61,14 @@ const bonusOf = day => (S.sports[day] || []).reduce((a, s) => a + s.kcal, 0);
 const targetOf = day => dayTargets(S.targets, bonusOf(day));
 const proteinHit = day => totals(day).p >= targetOf(day).p - 10;
 const slotsLogged = day => new Set((S.log[day] || []).map(e => e.slot)).size;
+
+// Goal countdown: every completed day since the anchor banks its real deficit (logic.js dayCredit).
+// The anchor moves to the measured trend weight at each weekly check-in, so reality corrects the estimate.
+const planned = () => Math.max(100, S.targets.tdee - S.targets.kcal);
+function daysLeft(upTo) {
+  const banked = range(S.goal.from, upTo).reduce((a, d) => a + dayCredit(S.targets.tdee + bonusOf(d), totals(d).kcal, planned()), 0);
+  return goalDays({ fromKg: S.goal.fromKg, goalKg: S.goal.kg, banked, planned: planned() });
+}
 
 function unitGrams(food, unit) {
   return unit ? ((food.units || []).find(u => u[0] === unit) || [unit, 100])[1] : 1;
@@ -135,6 +145,23 @@ function bar(label, val, max, cls) {
     <div class="bar-track"><div style="width:${Math.min(100, val / max * 100)}%"></div></div></div>`;
 }
 
+function goalCard() {
+  const today = todayKey(), y = addDays(today, -1);
+  const n = daysLeft(y), was = daysLeft(addDays(today, -2)), g = S.goal;
+  if (!n) return `<section class="card goal"><b>🎉 הגעת ליעד המשוער!</b><p class="small muted">שקול את עצמך כמה בקרים, ואם רוצה עוד – עדכן משקל יעד בלשונית "תוכנית".</p></section>`;
+  const nowKg = g.kg + n * planned() / KCAL_PER_KG;
+  const pct = Math.max(0, Math.min(100, (g.startKg - nowKg) / (g.startKg - g.kg) * 100 || 0));
+  const eta = new Date(addDays(today, n) + 'T12:00:00').toLocaleDateString('he-IL', { day: 'numeric', month: 'long' });
+  const msg = n < was ? `אתמול קירב אותך ב-${was - n} ${was - n === 1 ? 'יום' : 'ימים'} 🔥`
+    : n > was ? `אתמול היה כבד יותר (+${n - was}) – זה בסדר, היום יום חדש.`
+    : totals(y).kcal < 1200 ? 'יום לא מתועד לא מקרב – תעד הכל.' : '';
+  return `<section class="card goal">
+    <div class="goal-head"><div><small>ימים לקוביות (יעד ${g.kg} ק״ג)</small><b>${n}</b></div><small>≈ ${eta}</small></div>
+    <div class="bar-track"><div style="width:${pct}%"></div></div>
+    <p class="small muted">${msg} כל יום שנגמר על היעד = יום אחד פחות.</p>
+  </section>`;
+}
+
 function viewToday() {
   const d = viewDay, today = todayKey(), t = totals(d), tg = targetOf(d);
   const left = r0(tg.kcal - t.kcal);
@@ -169,6 +196,7 @@ function viewToday() {
     <span class="pill">📅 רישום ${lStreak} ${lStreak === 1 ? 'יום' : 'ימים'}</span>
     <span class="pill">🌾 סיבים ${r0(t.fib)}/${tg.fib}</span>
   </div>
+  ${goalCard()}
   <section class="card sport">
     <div class="sport-head"><b>⚡ ספורט</b><button class="chip" data-act="sport">+ הוסף</button></div>
     ${sports.length ? sports.map(s => `<div class="sport-row"><span>${esc(s.name)} · ${s.min} דק'</span><span class="bonus">+${s.kcal} קל'</span><button class="x" data-act="delSport" data-id="${s.id}" aria-label="מחק">✕</button></div>`).join('')
@@ -321,6 +349,11 @@ function viewPlan() {
   </section>
   <section class="card"><h3>📊 בדיקה שבועית</h3>${ck}</section>
   <section class="card">
+    <h3>🎯 כמה זמן לקוביות?</h3>
+    <p class="small">גירעון מתוכנן ~${planned()} קל' ביום ≈ <b>${(planned() * 7 / KCAL_PER_KG).toFixed(2)} ק״ג בשבוע</b>. מ-${S.goal.fromKg} ל-${S.goal.kg} ק״ג ≈ <b>${goalDays({ fromKg: S.goal.fromKg, goalKg: S.goal.kg, banked: 0, planned: planned() })} ימים</b>. זה לא 30 יום – ירידה מהירה יותר בגיל 16 שורפת שריר ופוגעת בגדילה.</p>
+    <p class="muted small">יום על היעד = יום אחד פחות. אכלת יותר – הספירה עולה; יום לא מתועד לא נספר. בכל בדיקה שבועית הספירה מתעדכנת לפי המשקל האמיתי שלך.</p>
+  </section>
+  <section class="card">
     <h3>🍽️ יום לדוגמה (~2,350 קל' · ~165ג' חלבון)</h3>
     <ul class="plan">
       <li><b>בוקר:</b> 3 ביצים + 2 פרוסות לחם מלא + ירקות + 2 כפות קוטג' <span>~480 · 33ג'</span></li>
@@ -355,6 +388,7 @@ function viewPlan() {
     <label>פעילות בסיס<select id="pact">
       ${[[1.3, 'מעט פעילות'], [1.45, '3 אימונים בשבוע (ספורט נוסף מוסיפים ביום עצמו)'], [1.6, '5+ אימונים בשבוע']].map(([v, n]) => `<option value="${v}" ${p.activity === v ? 'selected' : ''}>${n}</option>`).join('')}
     </select></label>
+    <label>משקל יעד (ק״ג)<input id="pg" type="number" inputmode="decimal" step="0.5" value="${S.goal.kg}"></label>
     <button class="ghost wide" data-act="saveProfile">שמור וחשב יעדים מחדש</button>
     <label>מפתח Gemini (לקריאת תוויות)<input id="gk" type="password" autocomplete="off" placeholder="AIza…" value="${esc(S.settings.geminiKey)}"></label>
     <p class="muted small">חינם מ-<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. נשמר רק בטלפון הזה.</p>
@@ -363,10 +397,11 @@ function viewPlan() {
   </section>`;
 }
 
-const VIEWS = { today: viewToday, add: viewAdd, progress: viewProgress, plan: viewPlan };
+const VIEWS = { today: viewToday, add: viewAdd, chat: viewChat, progress: viewProgress, plan: viewPlan };
 function render() {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   $('#view').innerHTML = VIEWS[tab]();
+  if (tab === 'chat') scrollTo(0, document.body.scrollHeight);
 }
 
 // ---------- sheets ----------
@@ -387,6 +422,7 @@ function openFood(food, entry) {
   sheet(`
     <h2>${esc(food.name)}</h2>
     <p class="muted small">${food.brand ? esc(food.brand) + ' · ' : ''}ל-100ג': ${r0(food.kcal)} קל' · ח' ${r1(food.p)} · פ' ${r1(food.c)} · ש' ${r1(food.f)}</p>
+    ${food.barcode && !food.ok ? `<p class="warn">⚠️ ערכים מהמאגר העולמי שלא אומתו. לחץ "ערוך ערכים" והשווה לאריזה.</p>` : ''}
     <div class="macros" id="fm"></div>
     <div class="qty">
       <button type="button" id="fminus" aria-label="פחות">−</button>
@@ -508,7 +544,7 @@ function openFoodForm(init = {}, note = '') {
     const food = {
       id: init.id || (barcode ? 'b:' + barcode : 'u:' + uid()),
       name: el.name.value.trim(), brand: el.brand.value.trim(), barcode,
-      kcal: n('kcal'), p: n('p'), c: n('c'), f: n('f'), fib: n('fib'), units,
+      kcal: n('kcal'), p: n('p'), c: n('c'), f: n('f'), fib: n('fib'), units, ok: 1,
     };
     S.foods[food.id] = food;
     save();
@@ -625,9 +661,12 @@ function fromOFF(p, code) {
   };
 }
 
+// Open Food Facts is crowd-sourced and often wrong for Israeli products (missing sizes, kJ typed as kcal),
+// so a scan is never trusted blindly: it's shown in the form to check against the package, once.
+const VERIFY = 'נמצא במאגר העולמי – שם יש הרבה טעויות במוצרים ישראליים. השווה לטבלה על האריזה (או צלם אותה) ובדוק את משקל הגביע/האריזה ביחידות. אחרי שמירה – נשמר לתמיד.';
 async function lookupBarcode(code) {
   const local = allFoods().find(f => f.barcode === code);
-  if (local) return openFood(local);
+  if (local) return local.ok ? openFood(local) : openFoodForm(local, VERIFY);
   toast('מחפש את המוצר…', 8000);
   let p = null;
   try {
@@ -636,10 +675,10 @@ async function lookupBarcode(code) {
   } catch { toast('אין אינטרנט – אפשר להזין ידנית'); }
   const food = p && fromOFF(p, code);
   if (food && food.kcal > 0) {
-    S.foods[food.id] = food;
-    save();
-    toast('✓ נמצא');
-    return openFood(food);
+    toast('');
+    if (food.kcal <= 900 && food.p <= 100 && food.c <= 100 && food.f <= 100) return openFoodForm(food, VERIFY);
+    for (const k of ['kcal', 'p', 'c', 'f', 'fib']) food[k] = '';
+    return openFoodForm(food, 'נמצא במאגר העולמי, אבל הערכים שם שגויים. צלם את התווית או הקלד מהאריזה.');
   }
   toast('');
   openFoodForm(food || { barcode: code }, 'המוצר עוד לא במאגר. צלם את טבלת הערכים התזונתיים – והוא יישמר לתמיד.');
@@ -698,6 +737,15 @@ Copy the numbers EXACTLY as printed in the per-100 g (or per-100 ml) column.
 - name: product name as printed (Hebrew), else "".
 - readable: false if the nutrition table is missing, cut off, blurry or you are not sure of the digits.`;
 
+async function gemini(req) {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.settings.geminiKey }, body: JSON.stringify(req),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error?.message || r.status);
+  return JSON.parse(j.candidates[0].content.parts.find(p => p.text && !p.thought).text);
+}
+
 function pickImage(maxSide, quality, camera) {
   return new Promise(res => {
     const inp = document.createElement('input');
@@ -736,12 +784,7 @@ async function readLabel() {
     },
   };
   try {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(req),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error?.message || r.status);
-    const v = JSON.parse(j.candidates[0].content.parts.find(p => p.text && !p.thought).text);
+    const v = await gemini(req);
     if (!v.readable) { toast('התווית לא ברורה – צלם שוב, קרוב ובאור טוב', 5000); return null; }
     toast('');
     return v;
@@ -749,6 +792,100 @@ async function readLabel() {
     toast('שגיאה בקריאת התווית: ' + e.message, 6000);
     return null;
   }
+}
+
+// ---------- chat logging ----------
+// Gemini only parses the text and picks database ids + grams; calories are computed here from the
+// database, so a weighed "200 g chicken" uses real per-100 g values instead of a model guess.
+const CHAT_PROMPT = `You are the food-logging assistant inside "חיטוב", a Hebrew calorie tracker used by Ido, a 16-year-old athlete
+on a slow cut (lose fat, keep and build muscle). Reply in short, warm, natural Hebrew (1–2 sentences). Never shame, never push
+eating below his targets.
+When Ido says he ate, is eating or drank something, add one entry per food to items:
+- Match each food to the FOOD DATABASE below and copy its id exactly. If he says raw (נא / לפני בישול) use the raw item; if he
+  doesn't say for meat, fish, rice or pasta, assume the weight is cooked and say so in the reply.
+- If he gives a count of a unit listed for that food (e.g. "2 ביצים", "פיתה"), set unit to that exact unit name and qty to the count.
+  Otherwise unit = "" and qty = grams.
+- grams: total grams eaten. Convert counts with the listed unit grams; if no amount was given, use a typical Israeli portion
+  and say which portion you assumed.
+- Only if nothing in the database fits: id = "" and give kcal, p, c, f per 100 g from standard nutrition tables (USDA / Israeli
+  Ministry of Health), using the closest generic food. Never invent label numbers for a brand you don't know.
+- slot: b breakfast, l lunch, d dinner, s snack, or none if he didn't say.
+Questions ("כמה חלבון ב…", "מה לאכול עכשיו?") or food he only plans to eat: items = [] and just answer, using the database values
+and today's numbers. Advice follows his plan: protein first (30–40 g per meal), carbs around training, never below the targets.
+When you log food, don't list per-item numbers (the app shows them); mention only assumptions you made.`;
+
+const CHAT_SCHEMA = (() => {
+  const s = { type: 'STRING' }, n = { type: 'NUMBER' };
+  return {
+    type: 'OBJECT',
+    properties: {
+      reply: s, slot: { type: 'STRING', enum: ['b', 'l', 'd', 's', 'none'] },
+      items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: s, name: s, qty: n, unit: s, grams: n, kcal: n, p: n, c: n, f: n }, required: ['id', 'name', 'qty', 'grams'] } },
+    },
+    required: ['reply', 'items'],
+  };
+})();
+const foodLine = f => `${f.id}|${f.name}${f.brand ? ` (${f.brand})` : ''}|${r0(f.kcal)}/${r1(f.p)}/${r1(f.c)}/${r1(f.f)}|${(f.units || []).map(u => `${u[0]}=${r0(u[1])}`).join(',')}`;
+
+function chatEntry(it, slot) {
+  const food = it.id && getFood(it.id);
+  if (food) {
+    if (it.unit && it.qty > 0 && (food.units || []).some(u => u[0] === it.unit)) return makeEntry(food, it.qty, it.unit, slot);
+    return it.grams > 0 && it.grams < 3000 ? makeEntry(food, it.grams, null, slot) : null;
+  }
+  if (!(it.grams > 0 && it.grams < 3000 && it.kcal >= 0 && it.kcal <= 900 && it.name)) return null;
+  return makeEntry({ id: 'est:' + it.name, name: '≈ ' + it.name, kcal: it.kcal, p: it.p || 0, c: it.c || 0, f: it.f || 0 }, it.grams, null, slot);
+}
+
+async function sendChat() {
+  const inp = $('#ci'), text = inp.value.trim();
+  if (!text || chatBusy) return;
+  if (!S.settings.geminiKey) return toast('צריך מפתח Gemini – לשונית "תוכנית" ← הגדרות', 5000);
+  const day = todayKey(), t = totals(day), tg = targetOf(day);
+  const history = S.chat.filter(m => !m.err).slice(-6);
+  while (history[0]?.role === 'ai') history.shift();
+  S.chat.push({ role: 'me', text });
+  chatBusy = true; render();
+  try {
+    const v = await gemini({
+      systemInstruction: { parts: [{ text: `${CHAT_PROMPT}
+Today so far: ${r0(t.kcal)} kcal, protein ${r0(t.p)} g, carbs ${r0(t.c)} g, fat ${r0(t.f)} g.
+Today's targets: ${tg.kcal} kcal, protein ${tg.p} g, carbs ${tg.c} g, fat ${tg.f} g.
+FOOD DATABASE (id|name|kcal/protein/carbs/fat per 100 g|units name=grams):
+${allFoods().map(foodLine).join('\n')}` }] },
+      contents: [...history.map(m => ({ role: m.role === 'me' ? 'user' : 'model', parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }] }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: CHAT_SCHEMA },
+    });
+    const slot = SLOTS.some(s => s[0] === v.slot) ? v.slot : slotNow();
+    const entries = (v.items || []).map(it => chatEntry(it, slot)).filter(Boolean);
+    if (entries.length) addEntries(day, entries);
+    S.chat.push({ role: 'ai', text: v.reply, day, ids: entries.map(e => e.id) });
+  } catch (e) {
+    S.chat.push({ role: 'ai', text: 'לא הצלחתי לחשב: ' + e.message, err: 1 });
+  }
+  S.chat = S.chat.slice(-40);
+  chatBusy = false; save(); render();
+}
+
+function viewChat() {
+  const msgs = S.chat.map((m, i) => {
+    if (m.role === 'me') return `<div class="msg me">${esc(m.text)}</div>`;
+    const items = (m.ids || []).map(id => (S.log[m.day] || []).find(e => e.id === id)).filter(Boolean);
+    const sum = items.reduce((a, e) => ({ k: a.k + e.kcal, p: a.p + e.p }), { k: 0, p: 0 });
+    return `<div class="msg ai ${m.err ? 'err' : ''}">${esc(m.text)}
+      ${items.length ? `<ul>${items.map(e => `<li><span>${esc(e.name)} · ${esc(qtyLabel(e))}</span><span>${e.kcal} · ${r0(e.p)}ג' ח'</span></li>`).join('')}</ul>
+        <div class="msg-foot"><b>נוסף: ${r0(sum.k)} קל' · ${r0(sum.p)}ג' חלבון</b><button class="chip" data-act="chatUndo" data-i="${i}">↩ בטל</button></div>` : ''}
+      ${m.undone ? '<small class="muted">בוטל</small>' : ''}</div>`;
+  }).join('');
+  const ex = ['אכלתי 200 גרם חזה עוף מבושל וכוס אורז', '2 ביצים, פרוסת לחם מלא וגביע קוטג\' 5%', 'כמה חלבון נשאר לי היום?'];
+  const t = totals(todayKey()), tg = targetOf(todayKey());
+  return `
+  <header class="top"><div><div class="eyebrow">צ'אט · נשארו ${r0(tg.kcal - t.kcal).toLocaleString()} קל' · ${r0(Math.max(0, tg.p - t.p))}ג' חלבון</div><h1>ספר לי מה אכלת</h1></div></header>
+  <div class="chat">${msgs || `<p class="muted small">כתוב כמו להודעה: מה אכלת וכמה (גרמים מהמשקל, או "2 ביצים"). אני מחשב לפי המאגר ומוסיף ליומן של היום.</p>
+    ${ex.map(x => `<button class="chip" data-act="chatEx">${esc(x)}</button>`).join('')}`}
+    ${chatBusy ? '<div class="msg ai typing">מחשב…</div>' : ''}</div>
+  <form id="cf" class="chat-form"><input id="ci" autocomplete="off" enterkeyhint="send" placeholder="למשל: 250 גרם אנטריקוט צלוי" aria-label="הודעה">
+    <button class="primary" aria-label="שלח" ${chatBusy ? 'disabled' : ''}>➤</button></form>`;
 }
 
 // ---------- toast + celebrate ----------
@@ -799,6 +936,13 @@ const ACT = {
   newMeal: () => openRecipe(),
   newFood: () => openFoodForm({ name: query.trim() }),
   offSearch,
+  chatEx: el => { $('#ci').value = el.textContent; $('#ci').focus(); },
+  chatUndo: el => {
+    const m = S.chat[+el.dataset.i];
+    S.log[m.day] = (S.log[m.day] || []).filter(e => !m.ids.includes(e.id));
+    m.ids = []; m.undone = 1;
+    save(); render();
+  },
   sport: openSport,
   delSport: el => { S.sports[viewDay] = (S.sports[viewDay] || []).filter(s => s.id !== el.dataset.id); save(); render(); },
   saveWeight: () => {
@@ -828,12 +972,14 @@ const ACT = {
     S.profile.weight = r1(trendAt(todayKey()) || S.profile.weight);
     S.targets = { ...S.targets, ...macros(c.kcal, S.profile.weight) };
     S.lastCheckin = todayKey();
+    S.goal = { ...S.goal, fromKg: S.profile.weight, from: todayKey() };
     save(); render(); toast(`✓ יעד חדש: ${c.kcal.toLocaleString()} קל'`);
   },
   saveProfile: () => {
     const v = id => +$(id).value;
-    if (!(v('#pw') > 30 && v('#ph') > 100 && v('#pa') > 10)) return toast('ערכים לא תקינים');
+    if (!(v('#pw') > 30 && v('#ph') > 100 && v('#pa') > 10 && v('#pg') > 40)) return toast('ערכים לא תקינים');
     Object.assign(S.profile, { weight: v('#pw'), height: v('#ph'), age: v('#pa'), activity: v('#pact') });
+    S.goal.kg = v('#pg');
     S.targets = calcTargets(S.profile);
     save(); render(); toast(`✓ יעד: ${S.targets.kcal.toLocaleString()} קל' · ${S.targets.p}ג' חלבון`);
   },
@@ -854,8 +1000,8 @@ const ACT = {
         const data = JSON.parse(await inp.files[0].text());
         if (!data.state?.log) throw new Error();
         if (!confirm('לשחזר מהגיבוי? הנתונים הנוכחיים יוחלפו.')) return;
-        S = { ...DEFAULTS(), ...data.state };
-        save();
+        localStorage.setItem(KEY, JSON.stringify(data.state));
+        S = load();
         localStorage.setItem(PHOTOS, JSON.stringify(data.photos || []));
         render(); toast('✓ שוחזר');
       } catch { toast('קובץ גיבוי לא תקין'); }
@@ -867,6 +1013,9 @@ const ACT = {
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (el && ACT[el.dataset.act]) { e.stopPropagation(); ACT[el.dataset.act](el, e); }
+});
+document.addEventListener('submit', e => {
+  if (e.target.id === 'cf') { e.preventDefault(); sendChat(); }
 });
 document.addEventListener('input', e => {
   if (e.target.id !== 'q') return;

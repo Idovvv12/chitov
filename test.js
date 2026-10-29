@@ -39,4 +39,14 @@ assert.strictEqual(L.streak(d => hit.has(d), today), 2, 'today pending still cou
 hit.add(today);
 assert.strictEqual(L.streak(d => hit.has(d), today), 3);
 
+// Countdown: 75 → 70 kg with a 287 kcal/day plan; an on-target day removes exactly one day.
+const planned = 2637 - 2350;
+const g = b => L.goalDays({ fromKg: 75, goalKg: 70, banked: b, planned });
+assert.strictEqual(g(0), 135);
+assert.strictEqual(g(L.dayCredit(2637, 2350, planned)), 134, 'on target → -1 day');
+assert.ok(g(L.dayCredit(2637, 3137, planned)) > 135, 'overeating adds days');
+assert.strictEqual(L.dayCredit(2637, 1500, planned), planned * 1.5, 'under-eating credit is capped');
+assert.strictEqual(L.dayCredit(2637, 600, planned), 0, 'untracked day = no credit');
+assert.strictEqual(g(5 * 7700), 0);
+
 console.log('logic ok');

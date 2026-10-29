@@ -93,6 +93,17 @@ function dayScore(t, target, slots) {
   return s;
 }
 
+// Goal countdown: each tracked day banks (burn - eaten) kcal toward the fat to lose.
+// Credit is capped at 1.5x the planned deficit so under-eating doesn't "speed up" the countdown.
+function dayCredit(burn, eaten, planned) {
+  if (eaten < 1200) return 0; // untracked / half-logged day counts as maintenance
+  return Math.min(burn - eaten, planned * 1.5);
+}
+function goalDays({ fromKg, goalKg, banked, planned }) {
+  const left = (fromKg - goalKg) * KCAL_PER_KG - banked;
+  return left <= 0 ? 0 : Math.ceil(left / planned);
+}
+
 // Consecutive days where ok(day) holds; today counts only once it's hit.
 function streak(ok, today) {
   let d = ok(today) ? today : addDays(today, -1), n = 0;
@@ -101,5 +112,5 @@ function streak(ok, today) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { KCAL_FLOOR, SPORTS, bmr, macros, calcTargets, sportBonus, dayTargets, dayKey, addDays, range, weeklyCheckin, dayScore, streak };
+  module.exports = { KCAL_FLOOR, SPORTS, bmr, macros, calcTargets, sportBonus, dayTargets, dayKey, addDays, range, weeklyCheckin, dayScore, streak, dayCredit, goalDays };
 }
