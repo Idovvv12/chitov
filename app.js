@@ -879,7 +879,8 @@ const PHOTO_CTX = `PHOTO MODE: the photo shows a meal Ido ate or is about to eat
 Trust the description over the photo for what the foods are, how they were cooked and any amounts he states.
 Put every food in the meal in items (including oil, sauces and drinks he mentions). Estimate grams from visual cues
 (a dinner plate is ~26 cm, a fork ~19 cm, a pita ~16 cm) and the cooked state you see.
-If the photo shows no food or is too unclear, items = [] and say so. In the reply, name the portions you were least sure of.`;
+If the photo shows no food or is too unclear, items = [] and say so. Nothing is logged yet (he confirms the grams next), so don't
+say you logged it; in the reply, name the portions you were least sure of.`;
 
 async function photoChat() {
   if (chatBusy || needKey()) return;
