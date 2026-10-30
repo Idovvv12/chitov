@@ -862,15 +862,72 @@ function resolveItem(it) {
 }
 
 const needKey = () => !S.settings.geminiKey && (toast('צריך מפתח Gemini – לשונית "תוכנית" ← הגדרות', 5000), true);
-function parseFoods(text, context, history = []) {
+function parseFoods(text, context, history = [], img) {
   return gemini({
     systemInstruction: { parts: [{ text: `${CHAT_PROMPT}
 ${context}
 FOOD DATABASE (id|name|kcal/protein/carbs/fat per 100 g|units name=grams):
 ${allFoods().map(foodLine).join('\n')}` }] },
-    contents: [...history.map(m => ({ role: m.role === 'me' ? 'user' : 'model', parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }] }],
+    contents: [...history.map(m => ({ role: m.role === 'me' ? 'user' : 'model', parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }, ...(img ? [{ inline_data: { mime_type: 'image/jpeg', data: img.split(',')[1] } }] : [])] }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: CHAT_SCHEMA },
   });
+}
+
+// Photo estimate: the description says WHAT it is (photos can't show oil, sauce or fillings), the photo
+// gives the portion. Portions from photos are the weak spot, so grams are reviewed before logging.
+const PHOTO_CTX = `PHOTO MODE: the photo shows a meal Ido ate or is about to eat; his message is his description of it.
+Trust the description over the photo for what the foods are, how they were cooked and any amounts he states.
+Put every food in the meal in items (including oil, sauces and drinks he mentions). Estimate grams from visual cues
+(a dinner plate is ~26 cm, a fork ~19 cm, a pita ~16 cm) and the cooked state you see.
+If the photo shows no food or is too unclear, items = [] and say so. In the reply, name the portions you were least sure of.`;
+
+async function photoChat() {
+  if (chatBusy || needKey()) return;
+  const desc = $('#ci').value.trim();
+  const img = await pickImage(1024, 0.8, false);
+  if (!img) return;
+  S.chat.push({ role: 'me', text: '📷 ' + (desc || 'תמונה של ארוחה') });
+  chatBusy = true; render();
+  try {
+    const v = await parseFoods(desc || '(no description)', PHOTO_CTX, [], img);
+    const m = { role: 'ai', text: v.reply, day: todayKey(), ids: [] };
+    S.chat.push(m);
+    const rs = (v.items || []).map(resolveItem).filter(Boolean);
+    if (rs.length) reviewPhoto(rs, SLOTS.some(s => s[0] === v.slot) ? v.slot : slotNow(), m);
+  } catch (e) {
+    S.chat.push({ role: 'ai', text: 'לא הצלחתי לחשב: ' + e.message, err: 1 });
+  }
+  S.chat = S.chat.slice(-40);
+  chatBusy = false; save(); render();
+}
+
+function reviewPhoto(rs, slot, m) {
+  const items = rs.map(r => ({ food: r.food, g: r1(r.qty * unitGrams(r.food, r.unit)) }));
+  const draw = () => {
+    sheet(`<h2>📷 הערכה מהתמונה</h2>
+      <p class="warn">כמויות מתמונה יכולות לטעות ב-20–30%. אם שקלת או יודע – תקן את הגרמים.</p>
+      <div class="list">${items.map((it, i) => `<div class="row ing"><div class="row-main"><b>${esc(it.food.name)}</b><small class="pk" data-i="${i}"></small></div>
+        <input class="gin" data-i="${i}" type="number" inputmode="decimal" min="0" value="${it.g}" aria-label="גרם"><span class="muted">ג'</span>
+        <button class="x" data-i="${i}" aria-label="הסר">✕</button></div>`).join('')}</div>
+      <div class="sum" id="psum"></div>
+      <button class="primary wide" id="padd">הוסף ליומן</button>`);
+    sum();
+    body.querySelectorAll('.gin').forEach(inp => inp.oninput = () => { items[inp.dataset.i].g = +inp.value || 0; sum(); });
+    body.querySelectorAll('.ing .x').forEach(b => b.onclick = () => { items.splice(b.dataset.i, 1); draw(); });
+    $('#padd').onclick = () => {
+      const entries = items.filter(it => it.g > 0).map(it => makeEntry(it.food, it.g, null, slot));
+      if (!entries.length) return closeSheet();
+      addEntries(m.day, entries);
+      m.ids = entries.map(e => e.id);
+      closeSheet();
+    };
+  };
+  const sum = () => {
+    const es = items.map(it => makeEntry(it.food, it.g, null, slot));
+    body.querySelectorAll('.pk').forEach(el => el.textContent = `${es[el.dataset.i].kcal} קל' · ${r0(es[el.dataset.i].p)}ג' חלבון`);
+    $('#psum').innerHTML = `סה"כ: <b>${es.reduce((a, e) => a + e.kcal, 0)}</b> קל' · <b>${r0(es.reduce((a, e) => a + e.p, 0))}</b>ג' חלבון`;
+  };
+  draw();
 }
 
 async function sendChat() {
@@ -910,9 +967,11 @@ function viewChat() {
   return `
   <header class="top"><div><div class="eyebrow">צ'אט · נשארו ${r0(tg.kcal - t.kcal).toLocaleString()} קל' · ${r0(Math.max(0, tg.p - t.p))}ג' חלבון</div><h1>ספר לי מה אכלת</h1></div></header>
   <div class="chat">${msgs || `<p class="muted small">כתוב כמו להודעה: מה אכלת וכמה (גרמים מהמשקל, או "2 ביצים"). אני מחשב לפי המאגר ומוסיף ליומן של היום.</p>
+    <p class="muted small">📷 צלחת בלי משקל? כתוב מה יש בה ("שניצל, פירה, סלט עם כף שמן") ולחץ על המצלמה – אני מעריך כמויות ואתה מאשר.</p>
     ${ex.map(x => `<button class="chip" data-act="chatEx">${esc(x)}</button>`).join('')}`}
     ${chatBusy ? '<div class="msg ai typing">מחשב…</div>' : ''}</div>
   <form id="cf" class="chat-form"><input id="ci" autocomplete="off" enterkeyhint="send" placeholder="למשל: 250 גרם אנטריקוט צלוי" aria-label="הודעה">
+    <button type="button" class="ghost" data-act="chatPhoto" aria-label="צלם ארוחה להערכה" ${chatBusy ? 'disabled' : ''}>📷</button>
     <button class="primary" aria-label="שלח" ${chatBusy ? 'disabled' : ''}>➤</button></form>`;
 }
 
@@ -964,6 +1023,7 @@ const ACT = {
   newMeal: () => openRecipe(),
   newFood: () => openFoodForm({ name: query.trim() }),
   offSearch,
+  chatPhoto: () => photoChat(),
   chatEx: el => { $('#ci').value = el.textContent; $('#ci').focus(); },
   chatUndo: el => {
     const m = S.chat[+el.dataset.i];
