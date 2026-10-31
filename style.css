@@ -12,7 +12,7 @@ body {
   font: 16px/1.45 Heebo, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
   -webkit-tap-highlight-color: transparent;
 }
-button, input, select { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; border: 0; background: none; }
 a { color: var(--prot); }
 :focus-visible { outline: 2px solid var(--prot); outline-offset: 2px; }
@@ -96,8 +96,8 @@ h3 { margin: 18px 0 8px; font-size: 15px; font-weight: 800; color: var(--muted);
 .big .ic { font-size: 26px; line-height: 1; }
 .big:first-child { background: var(--prot); color: #0a0d12; border-color: var(--prot); }
 
-input, select { width: 100%; background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-height: 48px; }
-input:focus, select:focus { border-color: var(--prot); outline: none; }
+input, select, textarea { width: 100%; background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-height: 48px; }
+input:focus, select:focus, textarea:focus { border-color: var(--prot); outline: none; }
 #q { font-size: 17px; margin-bottom: 6px; }
 .list { display: grid; gap: 6px; }
 .row { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 14px; padding: 10px 14px; cursor: pointer; }
@@ -231,3 +231,6 @@ dialog[open] { animation: up .22s cubic-bezier(.2,.8,.2,1); }
 .chat-form button { flex: none; width: 52px; border-radius: 14px; font-size: 20px; }
 .rai { grid-template-columns: 1fr auto; margin-top: 10px; }
 .rai button { white-space: nowrap; }
+.pv { width: 100%; max-height: 38vh; object-fit: contain; border-radius: 12px; display: block; margin-bottom: 10px; background: #000; }
+textarea { resize: vertical; }
+.msg .warn { margin-top: 8px; }

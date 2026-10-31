@@ -835,27 +835,29 @@ When Ido says he ate, is eating or drank something, add one entry per food to it
 - slot: b breakfast, l lunch, d dinner, s snack, or none if he didn't say.
 Questions ("כמה חלבון ב…", "מה לאכול עכשיו?") or food he only plans to eat: items = [] and just answer, using the database values
 and today's numbers. Advice follows his plan: protein first (30–40 g per meal), carbs around training, never below the targets.
-When you log food, don't list per-item numbers (the app shows them); mention only assumptions you made.`;
+ate = true whenever he reports food he ate or is eating. The app adds the items itself and shows exactly what was added, so never
+say you logged or added anything (no "רשמתי"/"הוספתי") and don't list per-item numbers; mention only assumptions you made.`;
 
 const CHAT_SCHEMA = (() => {
   const s = { type: 'STRING' }, n = { type: 'NUMBER' };
   return {
     type: 'OBJECT',
     properties: {
-      reply: s, slot: { type: 'STRING', enum: ['b', 'l', 'd', 's', 'none'] },
+      reply: s, ate: { type: 'BOOLEAN' }, slot: { type: 'STRING', enum: ['b', 'l', 'd', 's', 'none'] },
       items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: s, name: s, qty: n, unit: s, grams: n, kcal: n, p: n, c: n, f: n }, required: ['id', 'name', 'qty', 'grams'] } },
     },
-    required: ['reply', 'items'],
+    required: ['reply', 'ate', 'items'],
   };
 })();
 const foodLine = f => `${f.id}|${f.name}${f.brand ? ` (${f.brand})` : ''}|${r0(f.kcal)}/${r1(f.p)}/${r1(f.c)}/${r1(f.f)}|${(f.units || []).map(u => `${u[0]}=${r0(u[1])}`).join(',')}`;
 
 // Gemini item → DB food (or a "≈" per-100 g estimate) + portion; null if the numbers are implausible.
 function resolveItem(it) {
-  const food = it.id && getFood(it.id);
+  const food = (it.id && getFood(it.id.trim())) || allFoods().find(f => f.name === it.name);
   if (food) {
     if (it.unit && it.qty > 0 && (food.units || []).some(u => u[0] === it.unit)) return { food, qty: it.qty, unit: it.unit };
-    return it.grams > 0 && it.grams < 3000 ? { food, qty: it.grams, unit: null } : null;
+    const g = it.grams > 0 ? it.grams : it.unit ? 0 : it.qty;
+    return g > 0 && g < 3000 ? { food, qty: g, unit: null } : null;
   }
   if (!(it.grams > 0 && it.grams < 3000 && it.kcal >= 0 && it.kcal <= 900 && it.name)) return null;
   return { food: { id: 'est:' + it.name, name: '≈ ' + it.name, kcal: it.kcal, p: it.p || 0, c: it.c || 0, f: it.f || 0 }, qty: it.grams, unit: null };
@@ -882,12 +884,22 @@ Put every food in the meal in items (including oil, sauces and drinks he mention
 If the photo shows no food or is too unclear, items = [] and say so. Nothing is logged yet (he confirms the grams next), so don't
 say you logged it; in the reply, name the portions you were least sure of.`;
 
+// Photo first, then the description step, so he can say what's hidden (oil, sauce, fillings) before Gemini runs.
 async function photoChat() {
   if (chatBusy || needKey()) return;
-  const desc = $('#ci').value.trim();
   const img = await pickImage(1024, 0.8, false);
   if (!img) return;
-  S.chat.push({ role: 'me', text: '📷 ' + (desc || 'תמונה של ארוחה') });
+  sheet(`<h2>📷 מה יש בצלחת?</h2>
+    <img class="pv" src="${img}" alt="התמונה שנבחרה">
+    <textarea id="pd" rows="3" aria-label="תיאור הארוחה" placeholder="למשל: שניצל מטוגן, פירה, סלט עם כף שמן זית. אכלתי חצי">${esc($('#ci').value.trim())}</textarea>
+    <p class="muted small">מה זה, איך בושל, שמן ורטבים, וכמה מזה אכלת – ככה ההערכה הרבה יותר מדויקת.</p>
+    <button class="primary wide" id="pgo">✨ חשב</button>`);
+  $('#pd').focus();
+  $('#pgo').onclick = () => { const desc = $('#pd').value.trim(); closeSheet(); estimatePhoto(img, desc); };
+}
+
+async function estimatePhoto(img, desc) {
+  S.chat.push({ role: 'me', text: '📷 ' + (desc || 'תמונה של ארוחה'), day: todayKey() });
   chatBusy = true; render();
   try {
     const v = await parseFoods(desc || '(no description)', PHOTO_CTX, [], img);
@@ -935,17 +947,23 @@ async function sendChat() {
   const inp = $('#ci'), text = inp.value.trim();
   if (!text || chatBusy || needKey()) return;
   const day = todayKey(), t = totals(day), tg = targetOf(day);
+  pruneChat();
   const history = S.chat.filter(m => !m.err).slice(-6);
   while (history[0]?.role === 'ai') history.shift();
-  S.chat.push({ role: 'me', text });
+  S.chat.push({ role: 'me', text, day });
   chatBusy = true; render();
   try {
     const v = await parseFoods(text, `Today so far: ${r0(t.kcal)} kcal, protein ${r0(t.p)} g, carbs ${r0(t.c)} g, fat ${r0(t.f)} g.
 Today's targets: ${tg.kcal} kcal, protein ${tg.p} g, carbs ${tg.c} g, fat ${tg.f} g.`, history);
     const slot = SLOTS.some(s => s[0] === v.slot) ? v.slot : slotNow();
-    const entries = (v.items || []).map(resolveItem).filter(Boolean).map(r => makeEntry(r.food, r.qty, r.unit, slot));
+    const items = v.items || [], rs = items.map(resolveItem);
+    const entries = rs.filter(Boolean).map(r => makeEntry(r.food, r.qty, r.unit, slot));
     if (entries.length) addEntries(day, entries);
-    S.chat.push({ role: 'ai', text: v.reply, day, ids: entries.map(e => e.id) });
+    // The reply is the model's words; what actually got logged is decided here, so say plainly when something didn't.
+    const missed = items.filter((it, i) => !rs[i]).map(it => it.name);
+    const warn = missed.length ? `⚠️ לא נרשם: ${missed.join(', ')}. כתוב שוב עם כמות (למשל 150 גרם).`
+      : v.ate && !entries.length ? '⚠️ לא נרשם כלום ליומן. כתוב שוב מה אכלת וכמה.' : '';
+    S.chat.push({ role: 'ai', text: v.reply, day, ids: entries.map(e => e.id), ...(warn && { warn }) });
   } catch (e) {
     S.chat.push({ role: 'ai', text: 'לא הצלחתי לחשב: ' + e.message, err: 1 });
   }
@@ -953,7 +971,11 @@ Today's targets: ${tg.kcal} kcal, protein ${tg.p} g, carbs ${tg.c} g, fat ${tg.f
   chatBusy = false; save(); render();
 }
 
+// Chat starts fresh each day; the log itself keeps everything.
+const pruneChat = () => { S.chat = S.chat.filter(m => m.day === todayKey()); };
+
 function viewChat() {
+  pruneChat();
   const msgs = S.chat.map((m, i) => {
     if (m.role === 'me') return `<div class="msg me">${esc(m.text)}</div>`;
     const items = (m.ids || []).map(id => (S.log[m.day] || []).find(e => e.id === id)).filter(Boolean);
@@ -961,6 +983,7 @@ function viewChat() {
     return `<div class="msg ai ${m.err ? 'err' : ''}">${esc(m.text)}
       ${items.length ? `<ul>${items.map(e => `<li><span>${esc(e.name)} · ${esc(qtyLabel(e))}</span><span>${e.kcal} · ${r0(e.p)}ג' ח'</span></li>`).join('')}</ul>
         <div class="msg-foot"><b>נוסף: ${r0(sum.k)} קל' · ${r0(sum.p)}ג' חלבון</b><button class="chip" data-act="chatUndo" data-i="${i}">↩ בטל</button></div>` : ''}
+      ${m.warn ? `<p class="warn">${esc(m.warn)}</p>` : ''}
       ${m.undone ? '<small class="muted">בוטל</small>' : ''}</div>`;
   }).join('');
   const ex = ['אכלתי 200 גרם חזה עוף מבושל וכוס אורז', '2 ביצים, פרוסת לחם מלא וגביע קוטג\' 5%', 'כמה חלבון נשאר לי היום?'];
@@ -968,7 +991,7 @@ function viewChat() {
   return `
   <header class="top"><div><div class="eyebrow">צ'אט · נשארו ${r0(tg.kcal - t.kcal).toLocaleString()} קל' · ${r0(Math.max(0, tg.p - t.p))}ג' חלבון</div><h1>ספר לי מה אכלת</h1></div></header>
   <div class="chat">${msgs || `<p class="muted small">כתוב כמו להודעה: מה אכלת וכמה (גרמים מהמשקל, או "2 ביצים"). אני מחשב לפי המאגר ומוסיף ליומן של היום.</p>
-    <p class="muted small">📷 צלחת בלי משקל? כתוב מה יש בה ("שניצל, פירה, סלט עם כף שמן") ולחץ על המצלמה – אני מעריך כמויות ואתה מאשר.</p>
+    <p class="muted small">📷 צלחת בלי משקל? לחץ על המצלמה, צלם, וכתוב מה יש בצלחת – אני מעריך כמויות ואתה מאשר.</p>
     ${ex.map(x => `<button class="chip" data-act="chatEx">${esc(x)}</button>`).join('')}`}
     ${chatBusy ? '<div class="msg ai typing">מחשב…</div>' : ''}</div>
   <form id="cf" class="chat-form"><input id="ci" autocomplete="off" enterkeyhint="send" placeholder="למשל: 250 גרם אנטריקוט צלוי" aria-label="הודעה">
@@ -1105,6 +1128,13 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('submit', e => {
   if (e.target.id === 'cf') { e.preventDefault(); sendChat(); }
+});
+// The installed app can sit in the background overnight; when it comes back on a new day, jump to that day.
+let shownDay = todayKey();
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || shownDay === todayKey()) return;
+  shownDay = viewDay = todayKey();
+  if (!dlg.open) render();
 });
 document.addEventListener('input', e => {
   if (e.target.id !== 'q') return;
