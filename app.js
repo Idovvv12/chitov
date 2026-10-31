@@ -830,7 +830,8 @@ When Ido says he ate, is eating or drank something, add one entry per food to it
   Otherwise unit = "" and qty = grams.
 - grams: total grams eaten. Convert counts with the listed unit grams; if no amount was given, use a typical Israeli portion
   and say which portion you assumed.
-- Only if nothing in the database fits: id = "" and give kcal, p, c, f per 100 g from standard nutrition tables (USDA / Israeli
+- kcal, p, c, f per 100 g are required on every item: copy them from the database line when matched.
+- Only if nothing in the database fits: id = "" and unit = "", and take kcal, p, c, f from standard nutrition tables (USDA / Israeli
   Ministry of Health), using the closest generic food. Never invent label numbers for a brand you don't know.
 - slot: b breakfast, l lunch, d dinner, s snack, or none if he didn't say.
 Questions ("כמה חלבון ב…", "מה לאכול עכשיו?") or food he only plans to eat: items = [] and just answer, using the database values
@@ -844,7 +845,7 @@ const CHAT_SCHEMA = (() => {
     type: 'OBJECT',
     properties: {
       reply: s, ate: { type: 'BOOLEAN' }, slot: { type: 'STRING', enum: ['b', 'l', 'd', 's', 'none'] },
-      items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: s, name: s, qty: n, unit: s, grams: n, kcal: n, p: n, c: n, f: n }, required: ['id', 'name', 'qty', 'grams'] } },
+      items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: s, name: s, qty: n, unit: s, grams: n, kcal: n, p: n, c: n, f: n }, required: ['id', 'name', 'qty', 'unit', 'grams', 'kcal', 'p', 'c', 'f'] } },
     },
     required: ['reply', 'ate', 'items'],
   };
@@ -961,7 +962,7 @@ Today's targets: ${tg.kcal} kcal, protein ${tg.p} g, carbs ${tg.c} g, fat ${tg.f
     if (entries.length) addEntries(day, entries);
     // The reply is the model's words; what actually got logged is decided here, so say plainly when something didn't.
     const missed = items.filter((it, i) => !rs[i]).map(it => it.name);
-    const warn = missed.length ? `⚠️ לא נרשם: ${missed.join(', ')}. כתוב שוב עם כמות (למשל 150 גרם).`
+    const warn = missed.length ? `⚠️ לא נרשם: ${missed.join(', ')} – לא הצלחתי לחשב את זה. שלח אותו שוב בהודעה נפרדת.`
       : v.ate && !entries.length ? '⚠️ לא נרשם כלום ליומן. כתוב שוב מה אכלת וכמה.' : '';
     S.chat.push({ role: 'ai', text: v.reply, day, ids: entries.map(e => e.id), ...(warn && { warn }) });
   } catch (e) {
